@@ -7,7 +7,7 @@ second survives an interrupted run.
 import argparse
 
 from archive_pipeline import config
-from archive_pipeline.archive import chunk_date, find_chunks
+from archive_pipeline.archive import find_chunks
 from archive_pipeline.batch import Layout
 from archive_pipeline.inventory import survey, usable
 
@@ -41,13 +41,12 @@ def select(cfg, args):
     """Stations to process, and their chunks.
 
     Returns:
-        Dict of station code to a list of chunk stems, in time order.
+        Dict of station code to a list of chunk paths, in time order.
     """
     wanted = args.station
     if not wanted and args.all:
         wanted = [r.station for r in usable(survey(cfg.archive, cfg.ledgers))]
-    chunks = find_chunks(cfg.archive, wanted)
-    return {s: [p.stem for p in ps] for s, ps in sorted(chunks.items())}
+    return dict(sorted(find_chunks(cfg.archive, wanted).items()))
 
 
 def arm_names(args):
@@ -68,10 +67,12 @@ def build(cfg, args):
     arms = arm_names(args)
     windows = [] if args.no_windows else (args.window_seconds or DEFAULT_WINDOWS)
     rows = []
-    for stn, chunks in select(cfg, args).items():
+    for stn, paths in select(cfg, args).items():
+        chunks = [p.stem for p in paths]
         rows.append({
             "station": stn,
             "chunks": chunks,
+            "paths": paths,
             "baseline": lay.baseline(stn).exists(),
             "range": True if args.no_range else lay.has_range(stn, chunks),
             "scores": {a: lay.scored(stn, a, chunks) for a in arms},
