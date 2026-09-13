@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/archive_pipeline"]
+
+[project.scripts]
+apipe = "archive_pipeline.cli:main"
+
+[project]
+name = "archive-pipeline"
+version = "0.1.0"
+description = "Continuous seismic archive to model-ready artifacts, in one pass over the data"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.1",
+    "scipy>=1.14",
+    "pandas>=2.2",
+    # obspy is used for mseed decoding and travel times only. The merge/split
+    # path it also provides is deliberately NOT used; see archive/segments.py.
+    "obspy>=1.4",
+    "torch>=2.4",
+    "scikit-learn>=1.5",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

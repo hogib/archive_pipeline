@@ -1,0 +1,15 @@
+# Paths are relative to this file. See archive_pipeline/config.py.
+archive  = "../tdvms/afad_raw"
+stations = "../cnn_earthquake/catalogs/istasyon_katalog.csv"
+catalog  = "../cnn_earthquake/catalogs/catalog_current.csv"
+out      = "out"
+
+# Four campaigns wrote four ledgers and their station sets overlap. All of them
+# are read and reconciled; see inventory/ledger.py for why any one understates
+# coverage.
+ledgers = [
+    "../tdvms/tdvms_ledger.jsonl",
+    "../cnn_earthquake/afad_campaign_ledger.jsonl",
+    "../cnn_earthquake/demi_ledger.jsonl",
+    "../cnn_earthquake/gcam_ledger.jsonl",
+]
