@@ -30,7 +30,7 @@ class StationRunner:
 
     def __init__(self, station, chunks, layout, cfg, arms, device,
                  fs=100.0, freqmin=1.0, freqmax=45.0, workers=6,
-                 want_range=True, trimmed=True, lengths=(), snr_min=3.0,
+                 want_range=True, standardize="trimmed", lengths=(), snr_min=3.0,
                  pre=windows.DEFAULT_PRE,
                  noise_offset=windows.DEFAULT_NOISE_OFFSET, log=print):
         """Prepares a station for processing.
@@ -47,7 +47,7 @@ class StationRunner:
             freqmax: Detector bandpass high corner in Hz.
             workers: Filter threads.
             want_range: Whether to measure per-event signal-to-noise.
-            trimmed: Standardize with the baseline's trimmed sigma.
+            standardize: How windows are put into detector units.
             lengths: Window lengths to cut, in seconds. Empty cuts nothing.
             snr_min: Events below this measured SNR are not cut.
             pre: Seconds before the anchor a window starts.
@@ -57,7 +57,8 @@ class StationRunner:
         self.station, self.chunks, self.lay = station, chunks, layout
         self.cfg, self.arms, self.device = cfg, arms, device
         self.fs, self.freqmin, self.freqmax = fs, freqmin, freqmax
-        self.want_range, self.trimmed, self.log = want_range, trimmed, log
+        self.want_range, self.log = want_range, log
+        self.standardize = standardize
         self.lengths = sorted(lengths)
         self.snr_min, self.pre, self.noise_offset = snr_min, pre, noise_offset
         self.cut_catalog, self.dirs = None, {}
@@ -75,6 +76,15 @@ class StationRunner:
             the detector's input contract -- so it is reported and skipped
             rather than scanned against some other station's statistics.
         """
+        if self.standardize == "perwindow":
+            # Scale-free: there is no station statistic to load, which is the
+            # entire point of it.
+            self.baseline = {}
+            if self.want_range:
+                self._load_catalog()
+            if self.lengths:
+                self._prepare_cutting()
+            return True
         path = self.lay.baseline(self.station)
         if not path.exists():
             self.log(f"[{self.station}] no baseline at {path}; "
@@ -87,20 +97,24 @@ class StationRunner:
                      f"is {self.freqmin:g}-{self.freqmax:g} Hz; refusing")
             return False
         if self.want_range:
-            coords = pd.read_csv(self.cfg.stations, encoding="utf-8-sig")
-            coords.columns = [c.strip() for c in coords.columns]
-            row = coords[coords.Code == self.station]
-            if row.empty:
-                self.log(f"[{self.station}] not in the station catalogue; "
-                         f"skipping per-event SNR")
-                self.want_range = False
-            else:
-                self.catalog = snr.load_catalog(self.cfg.catalog,
-                                                float(row.iloc[0].Latitude),
-                                                float(row.iloc[0].Longitude))
+            self._load_catalog()
         if self.lengths:
             self._prepare_cutting()
         return True
+
+    def _load_catalog(self):
+        """Loads the event catalogue this station's SNR pass needs."""
+        coords = pd.read_csv(self.cfg.stations, encoding="utf-8-sig")
+        coords.columns = [c.strip() for c in coords.columns]
+        row = coords[coords.Code == self.station]
+        if row.empty:
+            self.log(f"[{self.station}] not in the station catalogue; "
+                     f"skipping per-event SNR")
+            self.want_range = False
+            return
+        self.catalog = snr.load_catalog(self.cfg.catalog,
+                                        float(row.iloc[0].Latitude),
+                                        float(row.iloc[0].Longitude))
 
     def _prepare_cutting(self):
         """Loads the anchored catalogue windows are cut against.
@@ -181,7 +195,8 @@ class StationRunner:
         if comps is None:
             self.log(f"  {stem}: incomplete components, skipped")
             return 0
-        missing = [c for c in comps if c not in self.baseline]
+        missing = ([] if self.standardize == "perwindow"
+                   else [c for c in comps if c not in self.baseline])
         if missing:
             self.log(f"  {stem}: no baseline for component(s) {missing}, skipped")
             return 0
@@ -196,7 +211,7 @@ class StationRunner:
                                        self.device, fs=self.fs,
                                        freqmin=self.freqmin,
                                        freqmax=self.freqmax, pool=self.pool,
-                                       trimmed=self.trimmed)
+                                       standardize=self.standardize)
             if times is None:
                 self.log(f"  {stem} {arm.name}: no unbroken 3-component span")
                 continue

@@ -21,6 +21,22 @@ from archive_pipeline.products.detector import load_ensemble, score_block
 DEFAULT_BATCH = 1024
 DEFAULT_BLOCK_WINDOWS = 20000
 
+# How a window is put into the units the detector expects. The detector has
+# fixed weights and was trained on inputs at one particular scale, so this is
+# not a free choice -- it must match training. See docs/noise-baseline.md.
+#
+#   perwindow  each window by its own mean and standard deviation. Scale-free:
+#              station gain, site noise and mid-archive gain changes all
+#              cancel, and a station with no history works immediately. What
+#              PhaseNet and EQTransformer do. Discards absolute amplitude.
+#   trimmed    the station's noise sigma, pooled over the quietest pieces.
+#   pooled     the station's noise sigma pooled over everything. Reproduces
+#              what the previous tooling did; kept to reproduce old scores,
+#              not because it is right.
+#   constant   one number for every station.
+STANDARDIZATIONS = ("perwindow", "trimmed", "pooled", "constant")
+DEFAULT_CONSTANT_SIGMA = 100.0
+
 
 @dataclasses.dataclass
 class Arm:
@@ -70,7 +86,7 @@ class Arm:
 def score_chunk(arm, seg_lists, comps, baseline, device, fs=100.0,
                 freqmin=1.0, freqmax=45.0, batch_size=DEFAULT_BATCH,
                 block_windows=DEFAULT_BLOCK_WINDOWS, near=None, pool=None,
-                trimmed=True):
+                standardize="trimmed", constant_sigma=DEFAULT_CONSTANT_SIGMA):
     """Scores every window of one chunk with one arm.
 
     Args:
@@ -90,9 +106,9 @@ def score_chunk(arm, seg_lists, comps, baseline, device, fs=100.0,
         near: Optional intervals to restrict scoring to.
         pool: Optional thread pool for the filtering. scipy's detrend and
             filtfilt release the GIL, so threads give real parallelism here.
-        trimmed: Standardize with the baseline's trimmed sigma where it has
-            one. See `products.baseline` for why the pooled value is not the
-            station's noise level.
+        standardize: One of `STANDARDIZATIONS`. Must match what the detector
+            was trained with; see the constant's comment.
+        constant_sigma: The divisor used when `standardize="constant"`.
 
     Returns:
         Tuple of `(t, p)` float arrays, or `(None, None)` when the chunk has no
@@ -113,8 +129,18 @@ def score_chunk(arm, seg_lists, comps, baseline, device, fs=100.0,
     if not times:
         return None, None
 
-    mus = np.array([baseline[c]["mu"] for c in comps])
-    sigmas = np.array([sigma_for(baseline[c], trimmed) for c in comps])
+    if standardize not in STANDARDIZATIONS:
+        raise ValueError(f"standardize must be one of {STANDARDIZATIONS}, "
+                         f"got {standardize!r}")
+    if standardize == "constant":
+        mus = np.zeros(3)
+        sigmas = np.full(3, float(constant_sigma))
+    elif standardize == "perwindow":
+        mus = sigmas = None
+    else:
+        mus = np.array([baseline[c]["mu"] for c in comps])
+        sigmas = np.array([sigma_for(baseline[c], standardize == "trimmed")
+                           for c in comps])
     probs = []
 
     def flush(pending, total):
@@ -130,7 +156,15 @@ def score_chunk(arm, seg_lists, comps, baseline, device, fs=100.0,
             for k in range(3):
                 c = clean_block(np.array(views_of[sj][k][a:b]), fs,
                                 freqmin, freqmax, taper)
-                blk[d:d + (b - a), :, k] = (c - mus[k]) / sigmas[k]
+                if mus is None:
+                    # Per-window: each row by its own statistics. Computed per
+                    # component, matching how the encoder standardizes a
+                    # channel rather than a window as a whole.
+                    mu = c.mean(axis=1, keepdims=True)
+                    sd = np.maximum(c.std(axis=1, keepdims=True), 1e-12)
+                    blk[d:d + (b - a), :, k] = (c - mu) / sd
+                else:
+                    blk[d:d + (b - a), :, k] = (c - mus[k]) / sigmas[k]
 
         list(map(fill, tasks) if pool is None else pool.map(fill, tasks))
         for lo in range(0, total, batch_size):

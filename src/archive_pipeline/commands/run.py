@@ -15,6 +15,7 @@ from archive_pipeline import config
 from archive_pipeline.batch import Layout
 from archive_pipeline.batch.run import run_stations
 from archive_pipeline.commands import plan as plan_cmd
+from archive_pipeline.products import scan as scan_mod
 from archive_pipeline.products.scan import Arm
 
 NAME = "run"
@@ -26,6 +27,17 @@ DEFAULT_ARM = "6s:6.0:trained_model_branch1d_asinh:cnn-lstm"
 def add_args(p):
     """Flags for the batch run."""
     plan_cmd.add_args(p)
+    g = p.add_argument_group("standardization (must match the detector's training)")
+    g.add_argument("--standardize", default="trimmed",
+                   choices=list(scan_mod.STANDARDIZATIONS),
+                   help="how a window is put into detector units. perwindow "
+                        "is scale-free and needs no baseline; trimmed uses the "
+                        "station's quiet-piece noise sigma; pooled reproduces "
+                        "the previous tooling; constant divides everything by "
+                        "--constant-sigma (default: trimmed)")
+    g.add_argument("--constant-sigma", type=float,
+                   default=scan_mod.DEFAULT_CONSTANT_SIGMA,
+                   help="divisor for --standardize constant")
     g = p.add_argument_group("conditioning (must match the baseline)")
     g.add_argument("--fs", type=float, default=100.0)
     g.add_argument("--freqmin", type=float, default=1.0)
@@ -79,6 +91,7 @@ def run(args):
     run_stations(rows, Layout(cfg.out), cfg, arms, device,
                  fs=args.fs, freqmin=args.freqmin, freqmax=args.freqmax,
                  workers=args.workers, want_range=not args.no_range,
+                 standardize=args.standardize,
                  lengths=lengths, snr_min=args.snr_min, pre=args.pre,
                  noise_offset=args.noise_offset)
     return 0
