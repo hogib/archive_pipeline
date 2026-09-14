@@ -15,6 +15,7 @@ import numpy as np
 
 from archive_pipeline.archive import (clean_block, clip_spans, common_spans,
                                       make_windows, taper_vector)
+from archive_pipeline.products.baseline import sigma_for
 from archive_pipeline.products.detector import load_ensemble, score_block
 
 DEFAULT_BATCH = 1024
@@ -68,7 +69,8 @@ class Arm:
 
 def score_chunk(arm, seg_lists, comps, baseline, device, fs=100.0,
                 freqmin=1.0, freqmax=45.0, batch_size=DEFAULT_BATCH,
-                block_windows=DEFAULT_BLOCK_WINDOWS, near=None, pool=None):
+                block_windows=DEFAULT_BLOCK_WINDOWS, near=None, pool=None,
+                trimmed=True):
     """Scores every window of one chunk with one arm.
 
     Args:
@@ -88,6 +90,9 @@ def score_chunk(arm, seg_lists, comps, baseline, device, fs=100.0,
         near: Optional intervals to restrict scoring to.
         pool: Optional thread pool for the filtering. scipy's detrend and
             filtfilt release the GIL, so threads give real parallelism here.
+        trimmed: Standardize with the baseline's trimmed sigma where it has
+            one. See `products.baseline` for why the pooled value is not the
+            station's noise level.
 
     Returns:
         Tuple of `(t, p)` float arrays, or `(None, None)` when the chunk has no
@@ -109,7 +114,7 @@ def score_chunk(arm, seg_lists, comps, baseline, device, fs=100.0,
         return None, None
 
     mus = np.array([baseline[c]["mu"] for c in comps])
-    sigmas = np.array([max(baseline[c]["sigma"], 1e-12) for c in comps])
+    sigmas = np.array([sigma_for(baseline[c], trimmed) for c in comps])
     probs = []
 
     def flush(pending, total):

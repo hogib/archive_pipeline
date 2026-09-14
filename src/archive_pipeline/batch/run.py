@@ -30,7 +30,7 @@ class StationRunner:
 
     def __init__(self, station, chunks, layout, cfg, arms, device,
                  fs=100.0, freqmin=1.0, freqmax=45.0, workers=6,
-                 want_range=True, lengths=(), snr_min=3.0,
+                 want_range=True, trimmed=True, lengths=(), snr_min=3.0,
                  pre=windows.DEFAULT_PRE,
                  noise_offset=windows.DEFAULT_NOISE_OFFSET, log=print):
         """Prepares a station for processing.
@@ -47,6 +47,7 @@ class StationRunner:
             freqmax: Detector bandpass high corner in Hz.
             workers: Filter threads.
             want_range: Whether to measure per-event signal-to-noise.
+            trimmed: Standardize with the baseline's trimmed sigma.
             lengths: Window lengths to cut, in seconds. Empty cuts nothing.
             snr_min: Events below this measured SNR are not cut.
             pre: Seconds before the anchor a window starts.
@@ -56,7 +57,7 @@ class StationRunner:
         self.station, self.chunks, self.lay = station, chunks, layout
         self.cfg, self.arms, self.device = cfg, arms, device
         self.fs, self.freqmin, self.freqmax = fs, freqmin, freqmax
-        self.want_range, self.log = want_range, log
+        self.want_range, self.trimmed, self.log = want_range, trimmed, log
         self.lengths = sorted(lengths)
         self.snr_min, self.pre, self.noise_offset = snr_min, pre, noise_offset
         self.cut_catalog, self.dirs = None, {}
@@ -194,7 +195,8 @@ class StationRunner:
             times, probs = score_chunk(arm, segs, comps, self.baseline,
                                        self.device, fs=self.fs,
                                        freqmin=self.freqmin,
-                                       freqmax=self.freqmax, pool=self.pool)
+                                       freqmax=self.freqmax, pool=self.pool,
+                                       trimmed=self.trimmed)
             if times is None:
                 self.log(f"  {stem} {arm.name}: no unbroken 3-component span")
                 continue
