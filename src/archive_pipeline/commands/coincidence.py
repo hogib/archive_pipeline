@@ -12,6 +12,7 @@ import argparse
 import itertools
 
 from archive_pipeline import config
+from archive_pipeline.archive import find_chunks
 from archive_pipeline.arrivals import ArrivalTimes
 from archive_pipeline.batch import Layout
 from archive_pipeline.inventory import (load_stations, pairs, survey, usable)
@@ -29,6 +30,14 @@ def add_args(p):
     p.add_argument("--all", action="store_true",
                    help="every pair with both stations scored and enough "
                         "joint coverage")
+    p.add_argument("--station", action="append",
+                   help="restrict --all to pairs among these stations; "
+                        "repeatable")
+    p.add_argument("--complete-only", action="store_true",
+                   help="restrict --all to stations with nothing still owed "
+                        "by the download campaign. A station whose archive is "
+                        "still growing will give a different answer next week, "
+                        "which is not a property of the station pair")
     p.add_argument("--arm", default="6s",
                    help="which scored arm to read (default: 6s)")
     p.add_argument("--window-seconds", type=float, default=6.0,
@@ -43,6 +52,12 @@ def add_args(p):
     p.add_argument("--snr-min", type=float, default=3.0)
     p.add_argument("--force", action="store_true",
                    help="recompute pairs already measured")
+    p.add_argument("--allow-partial", action="store_true",
+                   help="measure a pair even when a station has chunks on "
+                        "disk that this arm has not scored. Off by default: "
+                        "the result would be written, then skipped as "
+                        "'already measured' on the next run, and silently "
+                        "stand as the answer for a fraction of the record")
 
 
 def select(cfg, args, lay):
@@ -56,8 +71,20 @@ def select(cfg, args, lay):
         return [(0.0, 0, a, b) for a, b in args.pair]
     if not args.all:
         return []
-    rows = [r for r in usable(survey(cfg.archive, cfg.ledgers))
-            if any(lay.scores(r.station, args.arm).glob("*.npz"))]
+    rows = usable(survey(cfg.archive, cfg.ledgers))
+    if args.station:
+        want = set(args.station)
+        rows = [r for r in rows if r.station in want]
+    if args.complete_only:
+        dropped = [r.station for r in rows if r.pending_days]
+        rows = [r for r in rows if not r.pending_days]
+        if dropped:
+            print(f"still owed data, so excluded: {', '.join(sorted(dropped))}")
+    unscored = [r.station for r in rows
+                if not any(lay.scores(r.station, args.arm).glob("*.npz"))]
+    if unscored:
+        print(f"no {args.arm} scores, so excluded: {', '.join(sorted(unscored))}")
+    rows = [r for r in rows if r.station not in set(unscored)]
     out = pairs(rows, coords, args.min_joint_days)
     if args.max_separation:
         out = [p for p in out if p[0] <= args.max_separation]
@@ -75,16 +102,31 @@ def run(args):
         print("no pairs selected; pass --all or --pair A B")
         return 1
 
+    # Scored chunks against chunks on disk, per station. A pair computed from
+    # a station mid-scan is not wrong so much as provisional, and the skip
+    # rule would then freeze it as final.
+    on_disk = {s: len(v) for s, v in find_chunks(cfg.archive).items()}
+    scored = {s: len(list(lay.scores(s, args.arm).glob("*.npz")))
+              for s in on_disk}
+    partial = {s: (scored[s], on_disk[s]) for s in on_disk
+               if 0 < scored[s] < on_disk[s]}
+
     taup = ArrivalTimes(grid_km=5.0)
-    done = failed = 0
+    done = failed = skipped_partial = 0
     for sep, joint, a, b in todo:
         dest = lay.pair(a, b, args.arm)
         if dest.exists() and not args.force:
             print(f"== {a}-{b}: already measured, skipping")
             continue
         for stn in (a, b):
-            if not any(lay.scores(stn, args.arm).glob("*.npz")):
+            if not scored.get(stn):
                 print(f"== {a}-{b}: {stn} has no {args.arm} scores, skipping")
+                break
+            if stn in partial and not args.allow_partial:
+                n, tot = partial[stn]
+                print(f"== {a}-{b}: {stn} is only {n}/{tot} scored on "
+                      f"{args.arm}; skipping (--allow-partial to override)")
+                skipped_partial += 1
                 break
         else:
             snr = {s: (lay.range_csv(s) if lay.range_csv(s).exists() else None)
@@ -105,7 +147,10 @@ def run(args):
             table.to_csv(dest, index=False)
             print(f"\n  wrote {dest}\n")
             done += 1
-    print(f"{done} pair(s) measured" + (f", {failed} skipped" if failed else ""))
+    print(f"{done} pair(s) measured"
+          + (f", {failed} failed" if failed else "")
+          + (f", {skipped_partial} waiting on a partial scan" if skipped_partial
+             else ""))
     return 0
 
 
