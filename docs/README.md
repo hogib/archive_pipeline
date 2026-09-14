@@ -12,6 +12,7 @@ detail behind it.
 | [batch.md](batch.md) | the one-pass driver, the output layout, resuming |
 | [usage.md](usage.md) | the CLI, every command, worked runs |
 | [equivalence.md](equivalence.md) | **what was checked against the tooling this replaces** |
+| [noise-baseline.md](noise-baseline.md) | **a defect in the detector's input scaling, and what it costs** |
 
 ## Orientation
 
