@@ -17,7 +17,7 @@ import pandas as pd
 import torch
 
 from archive_pipeline.archive import (component_segments, pick_components,
-                                      read_chunk)
+                                      read_chunk, role_of)
 from archive_pipeline.arrivals import ArrivalTimes
 from archive_pipeline.products import baseline as bl
 from archive_pipeline.products import snr, windows
@@ -196,7 +196,7 @@ class StationRunner:
             self.log(f"  {stem}: incomplete components, skipped")
             return 0
         missing = ([] if self.standardize == "perwindow"
-                   else [c for c in comps if c not in self.baseline])
+                   else [c for c in comps if role_of(c) not in self.baseline])
         if missing:
             self.log(f"  {stem}: no baseline for component(s) {missing}, skipped")
             return 0

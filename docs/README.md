@@ -11,6 +11,7 @@ detail behind it.
 | [products.md](products.md) | baselines, per-event SNR, detector scores, coincidence |
 | [batch.md](batch.md) | the one-pass driver, the output layout, resuming |
 | [usage.md](usage.md) | the CLI, every command, worked runs |
+| [location-experiment.md](location-experiment.md) | *proposed*: epicentres from three stations |
 | [equivalence.md](equivalence.md) | **what was checked against the tooling this replaces** |
 | [noise-baseline.md](noise-baseline.md) | **a defect in the detector's input scaling, and what it costs** |
 

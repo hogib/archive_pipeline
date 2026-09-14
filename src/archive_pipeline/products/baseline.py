@@ -42,7 +42,8 @@ import time
 import numpy as np
 
 from archive_pipeline.archive import (clean_block, component_segments,
-                                      pick_components, read_chunk, taper_vector)
+                                      pick_components, read_chunk, role_of,
+                                      taper_vector)
 
 # Enough chunks to average over seasons and instrument changes, few enough that
 # a baseline is minutes rather than a full pass. Spread evenly, not taken from
@@ -82,8 +83,12 @@ def accumulate(chunks, fs=100.0, freqmin=1.0, freqmax=45.0,
             log(f"  {path.stem}: incomplete components, skipped")
             continue
         piece = int(round(piece_seconds * fs))
-        for comp in comps:
-            for _, data in component_segments(stream, comp, fs):
+        for code in comps:
+            # Keyed by role, not by the full channel code: a baseline must
+            # stay readable when a station's instrument band changes, and the
+            # band is recorded in the conditioning block instead.
+            comp = role_of(code)
+            for _, data in component_segments(stream, code, fs):
                 for lo in range(0, len(data), piece):
                     part = data[lo:lo + piece]
                     if len(part) < fs * 10:
@@ -155,6 +160,8 @@ def build(chunks, dest, fs=100.0, freqmin=1.0, freqmax=45.0,
     log(f"[baseline] {len(picked)} of {len(chunks)} chunks, "
         f"{freqmin:g}-{freqmax:g} Hz")
     stats = accumulate(picked, fs, freqmin, freqmax, piece_seconds, trim, log)
+    bands = sorted({c for p in picked[:1]
+                    for c in (pick_components(read_chunk(p)) or [])})
     if not stats:
         log("[baseline] no usable components; nothing written")
         return None
@@ -170,7 +177,8 @@ def build(chunks, dest, fs=100.0, freqmin=1.0, freqmax=45.0,
     # for a scan that filters the same way.
     stats["_conditioning"] = {"fs": fs, "freqmin": freqmin, "freqmax": freqmax,
                               "piece_seconds": piece_seconds, "trim": trim,
-                              "chunks": [p.name for p in picked]}
+                              "chunks": [p.name for p in picked],
+                              "channels": bands}
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(stats, indent=2) + "\n")
     log(f"[baseline] wrote {dest}")

@@ -37,11 +37,13 @@ def cut(segments, t0, n, fs):
 def write_mseed(arr, comps, t0, station, path, fs):
     """Writes one `(n, 3)` window as a three-trace mseed file."""
     traces = []
-    for k, comp in enumerate(comps):
+    for k, code in enumerate(comps):
         tr = Trace(arr[:, k].astype(np.int32))
         tr.stats.network = "TU"
         tr.stats.station = station
-        tr.stats.channel = f"HH{comp}"
+        # The real channel code, not a hard-coded band. A window cut from an
+        # accelerometer must not claim to be broadband.
+        tr.stats.channel = code if len(code) > 1 else f"HH{code}"
         tr.stats.sampling_rate = fs
         tr.stats.starttime = UTCDateTime(t0)
         traces.append(tr)

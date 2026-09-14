@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 from obspy import Stream, Trace, UTCDateTime
 
-from archive_pipeline.archive import component_segments, pick_components
+from archive_pipeline.archive import (band_of, component_segments,
+                                      pick_components, role_of)
 
 FS = 100.0
 T0 = UTCDateTime("2024-05-01T00:00:00")
@@ -95,7 +96,7 @@ def test_missing_component_returns_none():
     """A chunk missing a role is skipped, never silently given two horizontals."""
     assert pick_components(Stream([trace(0, 10, "N"), trace(0, 10, "E")])) is None
     assert pick_components(Stream([trace(0, 10, "Z"), trace(0, 10, "1"),
-                                   trace(0, 10, "2")])) == ["Z", "1", "2"]
+                                   trace(0, 10, "2")])) == ["HNZ", "HN1", "HN2"]
 
 
 def test_duplicate_trace_is_dropped():
@@ -139,3 +140,69 @@ def test_overlap_does_not_break_a_run():
     """Coverage held past a nested trace must not be mistaken for a gap."""
     a, b = trace(0, 2000), trace(1.0, 100)
     assert len(assert_same(Stream([a, b]))) == 1
+
+
+# --- instrument bands ------------------------------------------------------
+# KURT delivers a broadband (HH) and an accelerometer (HN) whose recorded
+# intervals overlap for 14.5 days of a 21-day chunk. Selecting on the
+# component letter alone merged the two into one stream.
+
+def banded(band, comp, start=0.0, n=1000, value=None):
+    tr = trace(start, n, comp)
+    tr.stats.channel = band + comp
+    if value is not None:
+        tr.data[:] = value
+    return tr
+
+
+def two_instruments():
+    return Stream([banded("HH", c, value=1.0) for c in "ZNE"]
+                  + [banded("HN", c, value=99.0) for c in "ZNE"])
+
+
+def test_broadband_is_preferred_over_accelerometer():
+    assert pick_components(two_instruments()) == ["HHZ", "HHN", "HHE"]
+
+
+def test_the_two_instruments_are_not_merged():
+    """The bug: 'Z' matched both HHZ and HNZ and painted them into one array."""
+    st = two_instruments()
+    got = component_segments(st, "HHZ", FS)
+    assert len(got) == 1
+    assert (got[0][1] == 1.0).all(), "accelerometer samples leaked into HH"
+    other = component_segments(st, "HNZ", FS)
+    assert (other[0][1] == 99.0).all()
+
+
+def test_bare_role_conflates_two_instruments():
+    """What the defect did. A bare role is kept only for reading old data.
+
+    KURT's broadband covers 14.5 days of a 21-day chunk and its accelerometer
+    covers all 21, so the two are not co-extensive and the conflation shows up
+    as one array holding samples from both sensors. With identical spans the
+    containment rule discards one instead -- silently picking a sensor rather
+    than blending them, which is no better.
+    """
+    st = Stream([banded("HH", "Z", start=0.0, n=1000, value=1.0),
+                 banded("HN", "Z", start=10.0, n=1000, value=99.0)])
+    got = component_segments(st, "Z", FS)
+    assert len(got) == 1
+    assert set(np.unique(got[0][1])) == {1.0, 99.0}, "should conflate; it is the bug"
+    assert len(component_segments(st, "HHZ", FS)[0][1]) == 1000
+
+
+def test_all_three_components_come_from_one_band():
+    """A chunk where HH lacks a vertical must fall back wholesale, not mix."""
+    st = Stream([banded("HH", "N"), banded("HH", "E")]
+                + [banded("HN", c) for c in "ZNE"])
+    assert pick_components(st) == ["HNZ", "HNN", "HNE"]
+
+
+def test_no_band_covering_all_three_is_refused():
+    st = Stream([banded("HH", "Z"), banded("HN", "N"), banded("BH", "E")])
+    assert pick_components(st) is None
+
+
+def test_band_and_role_helpers():
+    assert band_of("HHZ") == "HH" and role_of("HHZ") == "Z"
+    assert role_of("Z") == "Z"      # idempotent on a bare role

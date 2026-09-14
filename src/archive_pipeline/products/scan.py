@@ -14,7 +14,7 @@ import time
 import numpy as np
 
 from archive_pipeline.archive import (clean_block, clip_spans, common_spans,
-                                      make_windows, taper_vector)
+                                      make_windows, role_of, taper_vector)
 from archive_pipeline.products.baseline import sigma_for
 from archive_pipeline.products.detector import load_ensemble, score_block
 
@@ -138,9 +138,9 @@ def score_chunk(arm, seg_lists, comps, baseline, device, fs=100.0,
     elif standardize == "perwindow":
         mus = sigmas = None
     else:
-        mus = np.array([baseline[c]["mu"] for c in comps])
-        sigmas = np.array([sigma_for(baseline[c], standardize == "trimmed")
-                           for c in comps])
+        mus = np.array([baseline[role_of(c)]["mu"] for c in comps])
+        sigmas = np.array([sigma_for(baseline[role_of(c)],
+                                     standardize == "trimmed") for c in comps])
     probs = []
 
     def flush(pending, total):

@@ -35,26 +35,57 @@ import numpy as np
 # with mixed sensor codes -- two horizontals and no vertical.
 COMPONENT_ROLES = (("Z",), ("N", "1"), ("E", "2"))
 
+# Instrument bands, most preferred first. A station can deliver more than one
+# sensor: KURT carries a broadband (HH) and an accelerometer (HN) whose
+# recorded intervals overlap for 14.5 days of a 21-day chunk. They are
+# different instruments with different sensitivities, and selecting on the
+# component letter alone silently merges them into one stream -- which is what
+# a station whose "noise floor moves by a factor of 170" turns out to be.
+#
+# Broadband first because that is what the detector was trained on. The choice
+# is made once per chunk and applied to all three components, so the three
+# never come from different sensors.
+BAND_PREFERENCE = ("HH", "BH", "EH", "SH", "HN", "BN", "EN")
+
+
+def band_of(code):
+    """The instrument band of a channel code: 'HHZ' -> 'HH'."""
+    return code[:-1].upper()
+
+
+def role_of(code):
+    """The component role of a channel code: 'HHZ' -> 'Z'. Idempotent."""
+    return code[-1].upper()
+
 
 def pick_components(stream):
-    """The three channel codes to use, in Z/N/E role order.
+    """The three full channel codes to use, in Z/N/E role order.
+
+    One instrument band is chosen for the whole chunk -- the most preferred
+    band that can supply all three roles -- so the three components always
+    come from the same sensor.
 
     Args:
         stream: A decoded ObsPy `Stream`.
 
     Returns:
-        A list of three single-character channel codes, or None when any role
-        is unrepresented. None means the chunk cannot be scored and callers
-        skip it rather than substituting a channel.
+        A list of three channel codes such as `['HHZ', 'HHN', 'HHE']`, or None
+        when no single band covers all three roles. None means the chunk
+        cannot be scored and callers skip it rather than mixing sensors.
     """
-    have = {tr.stats.channel[-1].upper() for tr in stream}
-    out = []
-    for role in COMPONENT_ROLES:
-        match = next((c for c in role if c in have), None)
-        if match is None:
-            return None
-        out.append(match)
-    return out
+    have = {tr.stats.channel.upper() for tr in stream}
+    bands = {band_of(c) for c in have}
+    for band in [b for b in BAND_PREFERENCE if b in bands] + sorted(
+            bands - set(BAND_PREFERENCE)):
+        out = []
+        for role in COMPONENT_ROLES:
+            match = next((band + c for c in role if band + c in have), None)
+            if match is None:
+                break
+            out.append(match)
+        if len(out) == 3:
+            return out
+    return None
 
 
 def component_segments(stream, comp, fs, dtype=np.float64):
@@ -83,7 +114,10 @@ def component_segments(stream, comp, fs, dtype=np.float64):
 
     Args:
         stream: A decoded ObsPy `Stream`, not merged.
-        comp: Single-character component code, as returned by `pick_components`.
+        comp: A full channel code such as `'HHZ'`, which selects exactly that
+            instrument, or a bare role letter such as `'Z'`, which selects
+            every band -- kept only for reading data written before bands were
+            distinguished, and never what `pick_components` returns.
         fs: Nominal sampling rate in Hz. Traces recorded at another rate are
             resampled to it, as ObsPy's path did.
         dtype: Output sample dtype.
@@ -92,8 +126,11 @@ def component_segments(stream, comp, fs, dtype=np.float64):
         List of `(t0_epoch, data)` tuples, ordered in time, each contiguous.
     """
     traces = []
+    want = comp.upper()
+    exact = len(want) > 1          # a full code selects one instrument
     for tr in stream:
-        if tr.stats.channel[-1].upper() != comp:
+        code = tr.stats.channel.upper()
+        if (code != want) if exact else (role_of(code) != want):
             continue
         if abs(tr.stats.sampling_rate - fs) > 1e-6:
             tr = tr.copy()

@@ -11,9 +11,11 @@ from archive_pipeline.archive.chunks import (CHUNK_RE, chunk_date, find_chunks,
                                              nonconforming, read_chunk)
 from archive_pipeline.archive.clean import (clean_block, clean_window,
                                             taper_vector)
-from archive_pipeline.archive.segments import (COMPONENT_ROLES,
+from archive_pipeline.archive.segments import (BAND_PREFERENCE,
+                                               COMPONENT_ROLES, band_of,
                                                component_segments,
-                                               make_windows, pick_components)
+                                               make_windows, pick_components,
+                                               role_of)
 from archive_pipeline.archive.spans import (clip_spans, common_spans,
                                             coverage_spans, in_spans,
                                             intersect_spans, merge_intervals)
@@ -21,6 +23,6 @@ from archive_pipeline.archive.spans import (clip_spans, common_spans,
 __all__ = ["CHUNK_RE", "chunk_date", "find_chunks", "nonconforming",
            "read_chunk",
            "clean_block", "clean_window", "taper_vector",
-           "COMPONENT_ROLES", "component_segments", "make_windows",
-           "pick_components", "clip_spans", "common_spans", "coverage_spans",
+           "BAND_PREFERENCE", "COMPONENT_ROLES", "band_of", "role_of",
+           "component_segments", "make_windows", "pick_components", "clip_spans", "common_spans", "coverage_spans",
            "in_spans", "intersect_spans", "merge_intervals"]
