@@ -103,6 +103,53 @@ The mechanism is ordinary: fed inputs 14 times smaller than anything in its
 training distribution, the network stops discriminating and emits something
 close to a constant.
 
+## It does not merely compress; it inverts
+
+Compression alone would be survivable, since alarm thresholds are quantiles.
+Scoring one chunk four ways with identical weights and measuring how well each
+separates windows containing a catalogued arrival from background windows:
+
+| events | pooled | trimmed | constant | per-window |
+|---|---|---|---|---|
+| SNR ≥ 10 | **0.3330** | 0.8487 | 0.8627 | 0.7932 |
+| SNR ≥ 3 | **0.3533** | 0.7818 | 0.8098 | 0.7551 |
+| all catalogued | 0.4510 | 0.5432 | 0.5548 | 0.5457 |
+
+0.333 is below chance: under the deployed scale the detector scores clearly
+recorded earthquakes *lower* than background. That is not a loss of resolution
+and no threshold recovers it.
+
+The first attempt at this measurement labelled every catalogued event a
+positive and returned 0.45–0.49 for all four schemes, which looked like
+"nothing distinguishes them". Only 27.5% of catalogued events near MANT reach
+SNR 3 and 9.4% reach SNR 10; the rest leave no visible trace, so that label
+measures the catalogue's reach rather than the detector. The bottom row above
+is that measurement, kept as the reminder.
+
+Do not over-read the gaps among the three well-scaled schemes: at SNR ≥ 10 the
+comparison rests on 18 events and 77 positive windows. What the table supports
+is the separation between the deployed scale and the rest.
+
+## Scale-free standardisation
+
+`--standardize perwindow` divides each window by its own mean and standard
+deviation, so for any gain `a > 0` and offset `b`, mapping `x -> a*x + b`
+leaves the input unchanged. Station gain, site noise, instrument replacement
+and mid-archive gain changes all cancel identically; there is no per-station
+quantity to estimate, nothing to recompute as the archive grows, and a station
+with no history works immediately. PhaseNet and EQTransformer both do this.
+
+It costs absolute amplitude, so the detector must discriminate on shape alone.
+That it scores slightly below the station-scaled schemes above is expected
+rather than damning: those weights were trained under a station scale, so a
+per-window input is mismatched to them by construction. The comparison that
+settles it is a detector trained under it.
+
+KURT is the case no station-level scale handles. Its per-chunk sigma_Z runs
+2.9, 2.9, 4.0, 9.2, 48.4, 61.8, 89.7, 496.5 — a factor of 170, not monotone in
+time. Trimming fixes the estimator, not a station whose noise floor genuinely
+moves; per-window is the only one of the four schemes that is correct for it.
+
 ## The fix
 
 `accumulate` keeps per-piece statistics and reports three numbers:
@@ -144,14 +191,19 @@ What is **not** affected:
 - **The decoder, the detector weights, and the coincidence arithmetic**, all of
   which are checked separately in [equivalence.md](equivalence.md).
 
-What **is** affected, and how, is not yet settled. Coincidence thresholds are
-quantiles of each station's own score distribution, so a purely *monotone*
-compression would cancel out of the table entirely. But this compression is not
-monotone: at SEMS only 132,039 of 302,383 scores were distinct, and ties are
-genuine information loss, not a change of scale. Two saturated streams alarming
-on near-ties are close to random with respect to each other, which is
-indistinguishable in the table from two stations whose false alarms are
-genuinely independent.
+What **is** affected is every continuous score, and the inversion above means
+the effect cannot be bounded by the "thresholds are quantiles" argument. A
+purely monotone compression would cancel out of the coincidence tables
+entirely; an inverted ranking does not.
+
+The reported recall deserves specific suspicion. A recall of 0.73 was reported
+at one MANT operating point, which cannot be reconciled with an AUC of 0.33
+unless most of those apparent detections are a saturated score crossing a
+threshold rather than responding to signal.
+
+Two saturated streams alarming on near-ties are also close to random with
+respect to each other, which is indistinguishable in the table from two
+stations whose false alarms are genuinely independent.
 
 That matters most for the pairs that showed **no** excess. Provisional
 measurements before the correction:

@@ -13,6 +13,17 @@ import argparse
 import importlib
 import sys
 
+# A pass over this archive is hours and is normally run detached with its
+# output redirected, where Python's default block buffering means the log
+# stays empty until the run ends -- which is exactly when it stops being
+# useful. Progress goes to a file to be watched, so it is flushed as it is
+# written.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except AttributeError:  # not a regular stream (pytest capture, a pipe object)
+    pass
+
 # name -> (module, one-line description), grouped below by what you are doing.
 COMMANDS = {
     "inventory":   ("archive_pipeline.commands.inventory",
