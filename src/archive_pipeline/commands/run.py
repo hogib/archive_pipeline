@@ -37,6 +37,16 @@ def add_args(p):
     g.add_argument("--device", default=None, help="cuda or cpu; default auto")
     g.add_argument("--limit-chunks", type=int, default=None,
                    help="stop each station after N chunks, for a smoke test")
+    g = p.add_argument_group("window cutting")
+    g.add_argument("--snr-min", type=float, default=3.0,
+                   help="events below this measured SNR are not cut; the "
+                        "reading comes from range.csv, which is a product of "
+                        "this same pass, so a station's first pass defers "
+                        "cutting to its second (default: 3.0)")
+    g.add_argument("--pre", type=float, default=2.0,
+                   help="seconds before the predicted P a window starts")
+    g.add_argument("--noise-offset", type=float, default=300.0,
+                   help="seconds before P the paired noise window is taken")
 
 
 def run(args):
@@ -64,9 +74,13 @@ def run(args):
               f"{len(arm.models)} seed(s) from {arm.ckpt_dir}")
     print(f"[run] device={device}, {len(rows)} station(s)\n")
 
+    lengths = [] if args.no_windows else (args.window_seconds
+                                          or plan_cmd.DEFAULT_WINDOWS)
     run_stations(rows, Layout(cfg.out), cfg, arms, device,
                  fs=args.fs, freqmin=args.freqmin, freqmax=args.freqmax,
-                 workers=args.workers, want_range=not args.no_range)
+                 workers=args.workers, want_range=not args.no_range,
+                 lengths=lengths, snr_min=args.snr_min, pre=args.pre,
+                 noise_offset=args.noise_offset)
     return 0
 
 

@@ -20,7 +20,8 @@ from archive_pipeline.archive import (component_segments, pick_components,
                                       read_chunk)
 from archive_pipeline.arrivals import ArrivalTimes
 from archive_pipeline.products import baseline as bl
-from archive_pipeline.products import snr
+from archive_pipeline.products import snr, windows
+from archive_pipeline.products.association import load_snr, predicted_arrivals
 from archive_pipeline.products.scan import score_chunk, write_scores
 
 
@@ -29,7 +30,9 @@ class StationRunner:
 
     def __init__(self, station, chunks, layout, cfg, arms, device,
                  fs=100.0, freqmin=1.0, freqmax=45.0, workers=6,
-                 want_range=True, log=print):
+                 want_range=True, lengths=(), snr_min=3.0,
+                 pre=windows.DEFAULT_PRE,
+                 noise_offset=windows.DEFAULT_NOISE_OFFSET, log=print):
         """Prepares a station for processing.
 
         Args:
@@ -44,12 +47,19 @@ class StationRunner:
             freqmax: Detector bandpass high corner in Hz.
             workers: Filter threads.
             want_range: Whether to measure per-event signal-to-noise.
+            lengths: Window lengths to cut, in seconds. Empty cuts nothing.
+            snr_min: Events below this measured SNR are not cut.
+            pre: Seconds before the anchor a window starts.
+            noise_offset: Seconds before P the paired noise window is taken.
             log: Where progress goes.
         """
         self.station, self.chunks, self.lay = station, chunks, layout
         self.cfg, self.arms, self.device = cfg, arms, device
         self.fs, self.freqmin, self.freqmax = fs, freqmin, freqmax
         self.want_range, self.log = want_range, log
+        self.lengths = sorted(lengths)
+        self.snr_min, self.pre, self.noise_offset = snr_min, pre, noise_offset
+        self.cut_catalog, self.dirs = None, {}
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
         self.taup = ArrivalTimes(grid_km=5.0)
         self.baseline = None
@@ -87,13 +97,57 @@ class StationRunner:
                 self.catalog = snr.load_catalog(self.cfg.catalog,
                                                 float(row.iloc[0].Latitude),
                                                 float(row.iloc[0].Longitude))
+        if self.lengths:
+            self._prepare_cutting()
         return True
+
+    def _prepare_cutting(self):
+        """Loads the anchored catalogue windows are cut against.
+
+        Cutting is filtered by measured signal-to-noise, and that table is
+        itself a product of this pass -- so a station seeing its first pass
+        cannot cut in it. Rather than cut unfiltered and discard later, which
+        at this station's recovery rate would write roughly eight times the
+        files, cutting is deferred and the user told to run again. A second
+        pass is still half of what the tooling this replaces needed, and a
+        station that already has `range.csv` cuts in its first.
+        """
+        range_csv = self.lay.range_csv(self.station)
+        if not range_csv.exists():
+            self.log(f"[{self.station}] no range.csv yet, so windows cannot be "
+                     f"filtered by SNR; cutting deferred. Re-run `apipe run` "
+                     f"once this pass finishes.")
+            self.lengths = []
+            return
+        cat, _ = predicted_arrivals(self.station, self.cfg.stations,
+                                    self.cfg.catalog, taup=self.taup)
+        catalogued = len(cat)
+        measured = load_snr(range_csv)
+        cat = cat.merge(measured, left_on="EventID", right_on="event_id",
+                        how="left")
+        cat = cat[cat.snr >= self.snr_min]
+        cat["cut_epoch"] = cat.p_epoch
+        self.cut_catalog = cat.sort_values("p_epoch").reset_index(drop=True)
+        # Three denominators, all different and all easy to confuse: events in
+        # the catalogue near the station, events whose signal-to-noise was
+        # actually measurable, and events clearing the cut.
+        self.log(f"[{self.station}] {len(cat):,} events reach SNR "
+                 f"{self.snr_min:g}, of {len(measured):,} measured and "
+                 f"{catalogued:,} catalogued within range; cutting "
+                 + ", ".join(f"{w:g}s [P-{self.pre:g}, P+{w - self.pre:g}]"
+                             for w in self.lengths))
+        for w in self.lengths:
+            eq = self.lay.windows(self.station, int(w)) / "eq"
+            nz = self.lay.windows(self.station, int(w)) / "noise"
+            eq.mkdir(parents=True, exist_ok=True)
+            nz.mkdir(parents=True, exist_ok=True)
+            self.dirs[w] = (eq, nz)
 
     def todo(self, path):
         """What this chunk still needs.
 
         Returns:
-            Tuple of (arms needing it, whether SNR is needed).
+            Tuple of (arms needing it, whether SNR is needed, lengths to cut).
         """
         stem = path.stem
         arms = [a for a in self.arms
@@ -102,7 +156,9 @@ class StationRunner:
                     and not self.lay.range_part(self.station, stem).exists()
                     and not (self.lay.range_csv(self.station).exists()
                              and not self.lay.range_dir(self.station).exists()))
-        return arms, need_snr
+        cut = [w for w in self.lengths
+               if not self.lay.window_marker(self.station, int(w), stem).exists()]
+        return arms, need_snr, cut
 
     def process(self, path):
         """Decodes one chunk and writes every product still outstanding.
@@ -111,8 +167,8 @@ class StationRunner:
             Number of products written.
         """
         stem = path.stem
-        arms, need_snr = self.todo(path)
-        if not arms and not need_snr:
+        arms, need_snr, cut_lengths = self.todo(path)
+        if not arms and not need_snr and not cut_lengths:
             return 0
 
         t0 = time.time()
@@ -166,6 +222,22 @@ class StationRunner:
             self.log(f"  {stem} {'snr':>8}: {len(rows):>8,} of {len(sub):,} "
                      f"catalogued events measured"
                      + (f", {dropped} dropped at a gap" if dropped else "")
+                     + f", {time.time() - t:.0f}s")
+
+        if cut_lengths:
+            t = time.time()
+            kept, dropped, bands = windows.cut_chunk(
+                segs, comps, self.station, self.cut_catalog, cut_lengths,
+                self.dirs, fs=self.fs, pre=self.pre,
+                noise_offset=self.noise_offset)
+            for w in cut_lengths:
+                marker = self.lay.window_marker(self.station, int(w), stem)
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.touch()
+            written += len(cut_lengths)
+            self.log(f"  {stem} {'cut':>8}: {kept:>8,} event(s) x "
+                     f"{len(cut_lengths)} length(s)"
+                     + (f", {dropped} at a gap or edge" if dropped else "")
                      + f", {time.time() - t:.0f}s")
 
         self.log(f"  {stem}: {written} product(s), {time.time() - t0:.0f}s "

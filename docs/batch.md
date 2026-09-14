@@ -50,6 +50,18 @@ Every product is written the moment it is computed and skipped when present, so
 an interrupted run loses at most one chunk. This matters: a full pass is hours
 on a machine that is also downloading.
 
+### Cutting needs the pass before it
+
+Window cutting is filtered by measured signal-to-noise, and that table is
+itself a product of the same pass. A station seeing its first pass therefore
+cannot cut in it: `run` says so and defers. Re-running cuts.
+
+The alternative — cut everything and filter at encode time — was rejected on
+volume. At GCAM only 624 of 5,116 measured events clear SNR 3, so cutting
+unfiltered would write roughly eight times the files to throw most away. Two
+passes is still half of what the tooling this replaces needed, and a station
+that already has `range.csv` cuts in its first.
+
 Two forms of completion are recognised. A product keyed per chunk is done when
 its file exists. A whole-archive product adopted from the older tooling — a
 `range.csv` with no per-chunk parts, a `windows/<W>s/` with no marker

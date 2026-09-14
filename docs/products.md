@@ -79,6 +79,29 @@ the candidates named.
 Anchoring is load-bearing separately: `cnn` is a prefix of `cnn-lstm`, so the
 trailing underscore is what keeps the two apart.
 
+## Cut windows — `windows/<W>s/{eq,noise}/`
+
+An event window starting `pre` seconds before the predicted P, and a paired
+noise window from `noise_offset` seconds earlier. Every requested length is cut
+in the same pass, and an event is kept only if **every** length is clean — so
+the length series covers identical events, and a difference between lengths
+cannot come from a difference in which events survived.
+
+A window is refused unless all three components cover it inside one contiguous
+segment. Nothing is padded across a gap.
+
+### The filename is load-bearing
+
+Windows are named `event_<id>_raw.mseed`, exactly. The encoder parses an event
+id with `^(?:noise_)?event_(.+?)_raw$` and the capture is **non-greedy**, so a
+station infix — `event_627233_MANT_raw` — parses as the event id
+`627233_MANT`, which matches no catalogue row. Every window would lose its
+magnitude label, silently, and the dataset would come out empty with no error
+anywhere.
+
+The station goes in the path instead, where it distinguishes two stations' cuts
+without breaking the consumer. `tests/test_windows.py` pins this.
+
 ## Coincidence — `pairs/<A>-<B>/<arm>.csv`
 
 Requiring two stations to agree within a travel-time window, priced against
