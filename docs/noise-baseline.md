@@ -145,10 +145,33 @@ rather than damning: those weights were trained under a station scale, so a
 per-window input is mismatched to them by construction. The comparison that
 settles it is a detector trained under it.
 
-KURT is the case no station-level scale handles. Its per-chunk sigma_Z runs
-2.9, 2.9, 4.0, 9.2, 48.4, 61.8, 89.7, 496.5 — a factor of 170, not monotone in
-time. Trimming fixes the estimator, not a station whose noise floor genuinely
-moves; per-window is the only one of the four schemes that is correct for it.
+KURT is the case no station-level scale handles, though **not for the reason
+first recorded here**. Its per-chunk sigma_Z was measured at 2.9 … 496.5, a
+factor of 170, and read as a station whose noise floor moves. Both halves of
+that were measurement error:
+
+- the figures were *pooled* sigma, the statistic this page exists to
+  discredit — one KURT chunk reads pooled 43,090 against trimmed 88.8, a
+  ratio of 485
+- traces were selected by the last character of the channel code, which
+  merged KURT's broadband and accelerometer into one stream (see
+  [decoding.md](decoding.md))
+
+Measured correctly — trimmed statistic, one instrument — KURT's noise floor
+spans **3.7×** across its archive, against 3.3× at BAND and 3.8× at KIRK. It
+is an ordinary station.
+
+What is real is that KURT carries two sensors and not every chunk offers all
+three components of the broadband, so the selector falls back per chunk: seven
+of eight sampled chunks resolve to `HH` near sigma 63 and one to `HN` at 2.7.
+That is a **23× step between instruments**, not a drifting floor, and it is
+why no single station scale fits: the scale would be averaging two sensors.
+Per-window remains the right scheme for KURT because it never forms an opinion
+about the station at all. Trimming works fine within a band.
+
+`baseline` now records which instrument each sampled chunk resolved to and
+warns when they disagree, because that fallback was silent and silent is how
+the rest of this page happened.
 
 ## The fix
 

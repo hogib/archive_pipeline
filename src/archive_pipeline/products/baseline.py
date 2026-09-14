@@ -160,8 +160,16 @@ def build(chunks, dest, fs=100.0, freqmin=1.0, freqmax=45.0,
     log(f"[baseline] {len(picked)} of {len(chunks)} chunks, "
         f"{freqmin:g}-{freqmax:g} Hz")
     stats = accumulate(picked, fs, freqmin, freqmax, piece_seconds, trim, log)
-    bands = sorted({c for p in picked[:1]
-                    for c in (pick_components(read_chunk(p)) or [])})
+    # Which instrument each sampled chunk resolved to. A station can carry
+    # more than one sensor and the selector falls back per chunk, so a
+    # baseline can silently average two instruments -- at KURT the broadband
+    # sits near sigma 63 and the accelerometer near 2.7, a 23x step that no
+    # single number describes.
+    per_chunk = {}
+    for q in picked:
+        comps = pick_components(read_chunk(q))
+        per_chunk[q.name] = comps[0][:-1] if comps else None
+    bands = sorted({b for b in per_chunk.values() if b})
     if not stats:
         log("[baseline] no usable components; nothing written")
         return None
@@ -173,12 +181,17 @@ def build(chunks, dest, fs=100.0, freqmin=1.0, freqmax=45.0,
         if v["sigma"] > 2 * v["sigma_trimmed"]:
             log(f"    ^ pooled sigma is {v['sigma'] / v['sigma_trimmed']:.1f}x "
                 f"the trimmed one: a few loud pieces are setting it")
+    if len(bands) > 1:
+        log(f"[baseline] WARNING: sampled chunks resolve to more than one "
+            f"instrument ({', '.join(bands)}). One scale cannot describe two "
+            f"sensors; prefer --standardize perwindow at this station.")
+        for name, b in sorted(per_chunk.items()):
+            log(f"    {name}: {b}")
     # The conditioning travels with the statistics: a baseline is only valid
     # for a scan that filters the same way.
     stats["_conditioning"] = {"fs": fs, "freqmin": freqmin, "freqmax": freqmax,
                               "piece_seconds": piece_seconds, "trim": trim,
-                              "chunks": [p.name for p in picked],
-                              "channels": bands}
+                              "chunks": per_chunk, "bands": bands}
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(stats, indent=2) + "\n")
     log(f"[baseline] wrote {dest}")
